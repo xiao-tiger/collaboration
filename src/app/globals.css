@@ -1,0 +1,40 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: #fafafa;
+  color: #222;
+  font-family: system-ui, sans-serif;
+}
+
+main {
+  max-width: 800px;
+  margin: 64px auto;
+  padding: 0 24px;
+}
+
+h1 {
+  font-size: 24px;
+}
+
+.connection {
+  margin: 16px 0;
+  color: #666;
+  font-size: 14px;
+}
+
+.editor {
+  min-height: 320px;
+  padding: 24px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  background: white;
+  line-height: 1.8;
+}
+
+.editor:focus-visible {
+  outline: 2px solid #777;
+  outline-offset: 2px;
+}
