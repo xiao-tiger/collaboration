@@ -3,13 +3,70 @@
 import { useEffect, useRef, useState } from "react";
 import { createEditor, type Descendant } from "slate";
 import { Editable, Slate, withReact } from "slate-react";
+import { createTextCRDT } from '@/crdt'
 
 const initialValue: Descendant[] = [
   { type: "paragraph", children: [{ text: "" }] },
 ];
 
 export default function Editor() {
-  const [editor] = useState(() => withReact(createEditor()));
+  // const [editor] = useState(() => withReact(createEditor()));
+
+  const [editor] = useState(() => {
+    const editor = withReact(createEditor());
+    const originalApply = editor.apply;
+
+    let crdt: ReturnType<typeof createTextCRDT> | null = null
+
+    // 本章限定单段落纯文本：回车不新增段落
+    editor.insertBreak = () => {}
+    editor.insertSoftBreak = () => {}
+
+    // 粘贴时使用纯文本，多行内容合并为一行。
+    editor.insertData = (data) => {
+      const text = data.getData('text/plain').replace(/\r\n|\r|\n/g, ' ')
+      editor.insertText(text)
+    }
+
+
+    editor.apply = (operation) => {
+      console.log("[Slate] 操作：", operation);
+      if (operation.type === 'remove_text' || operation.type === 'insert_text') {
+
+        if (
+          operation.path.length !== 2 || 
+          operation.path[0] !== 0 || 
+          operation.path[1] !== 0
+        ) {
+          throw new Error("本章只支持第一个段落中的单个文本节点");
+        }
+
+        // 第一次编辑时创建；之后一直使用同一个副本
+        if (!crdt) {
+          crdt = createTextCRDT(crypto.randomUUID())
+        }
+
+        const operations = operation.type === 'insert_text'
+          ? crdt.insert(operation.offset, operation.text)
+          : crdt.remove(operation.offset, operation.text);
+
+        originalApply(operation);
+
+        console.log('[CRDT] 生成操作：', operations);
+        console.log('[CRDT] 文本：', crdt.getText());
+
+        return
+      }
+
+      originalApply(operation);
+    }
+
+    return editor
+  })
+
+
+
+
   const [status, setStatus] = useState("连接中");
   const socketRef = useRef<WebSocket | null>(null);
 
