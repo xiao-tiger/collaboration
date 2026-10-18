@@ -39,22 +39,25 @@ function compareId(a: CharId, b: CharId): number {
 
 export function createTextCRDT(clientId: string) {
     let counter = 0
+    // 已经应用到文档中的字符节点，包括墓碑
     const nodes = new Map<string, CharNode>()
+    // 已收到，尚未处理完成的操作
+    const pending = new Map<string, CRDTOperation>()
 
     // 本地和远端操作共用这个入口
-    function apply(operation: CRDTOperation) {
-        counter = Math.max(counter, operation.id.counter)
+    function tryApply(operation: CRDTOperation) {
         const key = idKey(operation.id)
 
         if (operation.type === 'insert') {
             // 已经收到过，不能重复插入或恢复已删除节点
-            if (nodes.has(key)) return
+            if (nodes.has(key)) return true
 
             if (
                 operation.after !== null 
                 && !nodes.has(idKey(operation.after))
             ) {
-                throw new Error('插入的前驱尚未收到：第四章节加入等待队列')
+                // throw new Error('插入的前驱尚未收到：第四章节加入等待队列')
+                return false
             }
 
             nodes.set(key, {
@@ -64,14 +67,47 @@ export function createTextCRDT(clientId: string) {
                 deleted: false,
             })
 
-            return 
+            return true
         }
 
         const target = nodes.get(key)
         if (!target) {
-            throw new Error("删除的目标尚未收到：第四章加入等待队列");
+            // throw new Error("删除的目标尚未收到：第四章加入等待队列");
+            return false
         }
         target.deleted = true
+        return true
+    }
+
+    function drainPending() {
+        let progressed = true
+
+        while (progressed) {
+            // 防止死循环，每执行一次就中断，除非下面找到待处理的操作
+            progressed = false
+
+            for (const [key, operation] of pending) {
+                if (tryApply(operation)) {
+                    pending.delete(key)
+                    progressed = true
+                }
+            }
+        }
+    }
+
+    function apply(operation: CRDTOperation) {
+        counter = Math.max(counter, operation.id.counter)
+        // 存入 pending 表中的，不能直接存 idKey
+        // inset:[A:2]
+        // delete:[A:2]
+        // 如果只用字符 ID([A:2]) 当作等待表的键，它们就会被当成同一条操作，导致其中一条无法保存
+        const key = `${operation.type}:${idKey(operation.id)}`
+
+        if (!pending.has(key)) {
+            pending.set(key, structuredClone(operation))
+        }
+
+        drainPending()
     }
 
     function visibleNodes() {
@@ -180,6 +216,10 @@ export function createTextCRDT(clientId: string) {
         return visibleNodes().map(node => node.value).join('')
     }
 
-    return { insert, remove, getText, apply }
+    function getPendingCount() {
+        return pending.size
+    }
+
+    return { insert, remove, getText, apply, getPendingCount }
 }
 
