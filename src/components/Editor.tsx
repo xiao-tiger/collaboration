@@ -28,7 +28,6 @@ export default function Editor() {
       editor.insertText(text)
     }
 
-
     editor.apply = (operation) => {
       console.log("[Slate] 操作：", operation);
       if (operation.type === 'remove_text' || operation.type === 'insert_text') {
@@ -63,8 +62,6 @@ export default function Editor() {
 
     return editor
   })
-
-
 
 
   const [status, setStatus] = useState("连接中");
