@@ -1,6 +1,8 @@
 import { createServer } from "node:http";
 import next from "next";
-import { WebSocketServer } from "ws";
+import WebSocket, { WebSocketServer } from "ws";
+import type { CRDTOperation } from '../src/crdt'
+import { parseMessage, type ServerMessage } from '../src/collaboration/protocol'
 
 const dev = process.env.NODE_ENV !== "production";
 const hostname = process.env.HOST ?? (dev ? "127.0.0.1" : "0.0.0.0");
@@ -34,13 +36,63 @@ server.on("upgrade", (request, socket, head) => {
 });
 
 wsServer.on("error", console.error);
+
+// 所有的链接共享同一份文档的操作历史
+const operationLog = new Map<string, CRDTOperation>()
+
 wsServer.on("connection", (socket) => {
   console.log("客户端已连接");
   socket.on("error", console.error);
 
+
+  const initial: ServerMessage = {
+    type: 'sync',
+    operations: [...operationLog.values()]
+  }
+
+  socket.send(JSON.stringify(initial))
+
   socket.on("message", (data, isBinary) => {
-    // 目前只是 echo，用来验证连接。广播和协同协议由你实现。
-    socket.send(data, { binary: isBinary });
+    const message = isBinary ? null : parseMessage(data.toString())
+
+    // 客户端只能提交 ops，不能发送 sync
+    if (!message || message.type !== 'ops') {
+      socket.close(1008, 'Invalid message')
+      return
+    }
+
+    const fresh: CRDTOperation[] = []
+
+    for (const operation of message.operations) {
+      const key = JSON.stringify([
+        operation.type,
+        operation.id.clientId,
+        operation.id.counter
+      ])
+
+      if (operationLog.has(key)) continue
+
+      operationLog.set(key, operation)
+      fresh.push(operation)
+    }
+
+    if (fresh.length === 0) return
+
+    const outgoing: ServerMessage = {
+      type: 'ops',
+      operations: fresh
+    }
+
+    const payload = JSON.stringify(outgoing)
+
+    for (const client of wsServer.clients) {
+      if (
+        client !== socket &&
+        client.readyState === WebSocket.OPEN
+      ) {
+        client.send(payload)
+      }
+    }
   });
 
   socket.on("close", () => console.log("客户端已断开"));
