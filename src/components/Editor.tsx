@@ -4,6 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import { createEditor, type Descendant } from "slate";
 import { Editable, Slate, withReact } from "slate-react";
 import { createTextCRDT } from '@/crdt'
+import { withCollaboration } from "@/collaboration/slate";
+import { connectDocument } from "@/collaboration/client";
 
 const initialValue: Descendant[] = [
   { type: "paragraph", children: [{ text: "" }] },
@@ -12,96 +14,96 @@ const initialValue: Descendant[] = [
 export default function Editor() {
   // const [editor] = useState(() => withReact(createEditor()));
 
-  const [editor] = useState(() => {
-    const editor = withReact(createEditor());
-    const originalApply = editor.apply;
+  const [binding] = useState(() => withCollaboration(withReact(createEditor())))
 
-    let crdt: ReturnType<typeof createTextCRDT> | null = null
+  // const [editor] = useState(() => {
+  //   const editor = withReact(createEditor());
+  //   const originalApply = editor.apply;
 
-    // 本章限定单段落纯文本：回车不新增段落
-    editor.insertBreak = () => {}
-    editor.insertSoftBreak = () => {}
+  //   let crdt: ReturnType<typeof createTextCRDT> | null = null
 
-    // 粘贴时使用纯文本，多行内容合并为一行。
-    editor.insertData = (data) => {
-      const text = data.getData('text/plain').replace(/\r\n|\r|\n/g, ' ')
-      editor.insertText(text)
-    }
+  //   // 本章限定单段落纯文本：回车不新增段落
+  //   editor.insertBreak = () => {}
+  //   editor.insertSoftBreak = () => {}
 
-    editor.apply = (operation) => {
-      console.log("[Slate] 操作：", operation);
-      if (operation.type === 'remove_text' || operation.type === 'insert_text') {
+  //   // 粘贴时使用纯文本，多行内容合并为一行。
+  //   editor.insertData = (data) => {
+  //     const text = data.getData('text/plain').replace(/\r\n|\r|\n/g, ' ')
+  //     editor.insertText(text)
+  //   }
 
-        if (
-          operation.path.length !== 2 || 
-          operation.path[0] !== 0 || 
-          operation.path[1] !== 0
-        ) {
-          throw new Error("本章只支持第一个段落中的单个文本节点");
-        }
+  //   editor.apply = (operation) => {
+  //     console.log("[Slate] 操作：", operation);
+  //     if (operation.type === 'remove_text' || operation.type === 'insert_text') {
 
-        // 第一次编辑时创建；之后一直使用同一个副本
-        if (!crdt) {
-          crdt = createTextCRDT(crypto.randomUUID())
-        }
+  //       if (
+  //         operation.path.length !== 2 || 
+  //         operation.path[0] !== 0 || 
+  //         operation.path[1] !== 0
+  //       ) {
+  //         throw new Error("本章只支持第一个段落中的单个文本节点");
+  //       }
 
-        const operations = operation.type === 'insert_text'
-          ? crdt.insert(operation.offset, operation.text)
-          : crdt.remove(operation.offset, operation.text);
+  //       // 第一次编辑时创建；之后一直使用同一个副本
+  //       if (!crdt) {
+  //         crdt = createTextCRDT(crypto.randomUUID())
+  //       }
 
-        originalApply(operation);
+  //       const operations = operation.type === 'insert_text'
+  //         ? crdt.insert(operation.offset, operation.text)
+  //         : crdt.remove(operation.offset, operation.text);
 
-        console.log('[CRDT] 生成操作：', operations);
-        console.log('[CRDT] 文本：', crdt.getText());
+  //       originalApply(operation);
 
-        return
-      }
+  //       console.log('[CRDT] 生成操作：', operations);
+  //       console.log('[CRDT] 文本：', crdt.getText());
 
-      originalApply(operation);
-    }
+  //       return
+  //     }
 
-    return editor
-  })
+  //     originalApply(operation);
+  //   }
+
+  //   return editor
+  // })
 
 
   const [status, setStatus] = useState("连接中");
   const socketRef = useRef<WebSocket | null>(null);
 
-  useEffect(() => {
-    const socketUrl = new URL("/ws", window.location.href);
-    socketUrl.protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const socket = new WebSocket(socketUrl);
-    socketRef.current = socket;
+  const sessionRef = useRef<ReturnType<typeof connectDocument> | null>(null)
+  const resumeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-    socket.onopen = () => setStatus("已连接");
-    socket.onclose = () => setStatus("已断开");
-    socket.onerror = () => setStatus("连接失败，请刷新页面重试");
-    socket.onmessage = (event) => {
-      console.log("[WebSocket] 收到消息：", event.data);
-      // TODO: 在这里接入你自己的 CRDT 合并逻辑，再更新 Slate。
-    };
+  useEffect(() => {
+    const url = new URL("/ws", window.location.href);
+    url.protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+
+    const session = connectDocument(
+      url.toString(),
+      () => binding.receive(session.getVisibleChars()),
+      setStatus,
+    )
+
+    sessionRef.current = session
+    binding.attach(session)
 
     return () => {
-      socketRef.current = null;
-      socket.onopen = null;
-      socket.onclose = null;
-      socket.onerror = null;
-      socket.onmessage = null;
-
-      // React 开发模式会重复执行 effect，等待握手完成后再关闭。
-      if (socket.readyState === WebSocket.CONNECTING) {
-        socket.addEventListener("open", () => socket.close(), { once: true });
-      } else {
-        socket.close();
+      if (resumeTimer.current !== null) {
+        clearTimeout(resumeTimer.current)
+        resumeTimer.current = null
       }
-    };
-  }, []);
+
+      binding.attach(null)
+      sessionRef.current = null
+      session.close()
+    }
+  }, [binding]);
 
   return (
     <>
       <p className="connection" role="status">WebSocket：{status}</p>
       <Slate
-        editor={editor}
+        editor={binding.editor}
         initialValue={initialValue}
         onChange={() => {
           // TODO: 从 editor.operations 获取操作，转换为你定义的 CRDT 操作。
@@ -112,6 +114,29 @@ export default function Editor() {
           className="editor"
           aria-label="文档内容"
           placeholder="从这里开始输入…"
+          readOnly={status !== "已同步"}
+          onCompositionStart={() => {
+            if (resumeTimer.current !== null) {
+              clearTimeout(resumeTimer.current);
+              resumeTimer.current = null;
+            }
+
+            sessionRef.current?.pauseRemote();
+          }}
+          onCompositionEnd={() => {
+            const session = sessionRef.current;
+
+            resumeTimer.current = setTimeout(() => {
+              resumeTimer.current = null;
+
+              if (sessionRef.current === session) {
+                session?.resumeRemote();
+              }
+            }, 0);
+          }}
+
+
+
           renderElement={({ attributes, children }) => (
             <p {...attributes}>{children}</p>
           )}

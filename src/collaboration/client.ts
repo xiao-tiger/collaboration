@@ -1,5 +1,5 @@
 import { createTextCRDT } from '../crdt'
-import { parseMessage, type OpsMessage } from './protocol'
+import { parseMessage, type OpsMessage, type ServerMessage } from './protocol'
 
 export function connectDocument(
     url: string,
@@ -11,6 +11,8 @@ export function connectDocument(
 
     let ready = false
     let disposed = false
+    let remotePaused = false
+    const deferred: ServerMessage[] = []
 
     onStatus('连接中')
 
@@ -35,16 +37,18 @@ export function connectDocument(
             return;
         }
 
-        for (const operation of message.operations) {
-            crdt.apply(operation)
+        // for (const operation of message.operations) {
+        //     crdt.apply(operation)
+        // }
+
+        // onRemoteText(crdt.getText())
+
+        if (remotePaused && message.type === 'ops') {
+            deferred.push(message)
+            return
         }
 
-        onRemoteText(crdt.getText())
-
-        if (message.type === 'sync') {
-            ready = true
-            onStatus('已同步')
-        }
+        receive(message)
     }
 
     socket.onclose = () => {
@@ -87,6 +91,19 @@ export function connectDocument(
         socket.send(JSON.stringify(message))
     }
 
+    function receive(message: ServerMessage) {
+        for (const operation of message.operations) {
+            crdt.apply(operation)
+        }
+
+        onRemoteText(crdt.getText())
+
+        if (message.type === 'sync') {
+            ready = true
+            onStatus('已同步')
+        }
+    }
+
     return {
         insert: (offset: number, text: string) =>
             edit("insert", offset, text),
@@ -96,9 +113,32 @@ export function connectDocument(
 
         getText: crdt.getText,
 
+        getVisibleChars: crdt.getVisibleChars,
+
+        isReady: () => {
+            return !disposed && ready && socket.readyState === WebSocket.OPEN
+        },
+
+        pauseRemote() {
+            remotePaused = true
+        },
+
+        resumeRemote() {
+            remotePaused = false
+
+            while (
+                !disposed &&
+                !remotePaused &&
+                deferred.length > 0
+            ) {
+                receive(deferred.shift()!)
+            }
+        },
+
         close() {
             disposed = true;
             ready = false;
+            deferred.length = 0
 
             if (socket.readyState === WebSocket.CONNECTING) {
                 socket.addEventListener(

@@ -25,6 +25,11 @@ export type CRDTOperation = {
     id: CharId
 }
 
+export type VisibleChar = {
+    key: string
+    value: string
+}
+
 function idKey(id: CharId | null): string {
     return id === null ? 'ROOT' : `[${id.clientId}:${id.counter}]`
 }
@@ -220,6 +225,13 @@ export function createTextCRDT(clientId: string) {
         return pending.size
     }
 
-    return { insert, remove, getText, apply, getPendingCount }
+    function getVisibleChars(): VisibleChar[] {
+        return visibleNodes().map(node => ({
+            key: idKey(node.id),
+            value: node.value
+        }))
+    }
+
+    return { insert, remove, getText, apply, getPendingCount, getVisibleChars }
 }
 
